@@ -1,9 +1,8 @@
+#include "pot.h"
+
 #include <OneWire.h>
 
 OneWire  ds(13);
-
-const int kSpeaker = 12;
-const int kBeatTime = 200;
 
 void setup(void) {
   Serial.begin(9600);
@@ -25,12 +24,6 @@ void loop(void) {
     return;
   }
 
-  Serial.print("ROM =");
-  for( i = 0; i < 8; i++) {
-    Serial.write(' ');
-    Serial.print(addr[i], HEX);
-  }
-
   if (OneWire::crc8(addr, 7) != addr[7]) {
       Serial.println("CRC is not valid!");
       return;
@@ -40,15 +33,12 @@ void loop(void) {
   // the first ROM byte indicates which chip
   switch (addr[0]) {
     case 0x10:
-      Serial.println("  Chip = DS18S20");  // or old DS1820
       type_s = 1;
       break;
     case 0x28:
-      Serial.println("  Chip = DS18B20");
       type_s = 0;
       break;
     case 0x22:
-      Serial.println("  Chip = DS1822");
       type_s = 0;
       break;
     default:
@@ -67,17 +57,9 @@ void loop(void) {
   ds.select(addr);
   ds.write(0xBE);         // Read Scratchpad
 
-  Serial.print("  Data = ");
-  Serial.print(present, HEX);
-  Serial.print(" ");
   for ( i = 0; i < 9; i++) {           // we need 9 bytes
     data[i] = ds.read();
-    Serial.print(data[i], HEX);
-    Serial.print(" ");
   }
-  Serial.print(" CRC=");
-  Serial.print(OneWire::crc8(data, 8), HEX);
-  Serial.println();
 
   // Convert the data to actual temperature
   // because the result is a 16 bit signed integer, it should
@@ -98,20 +80,63 @@ void loop(void) {
     else if (cfg == 0x40) raw = raw & ~1; // 11 bit res, 375 ms
     //// default is 12 bit resolution, 750 ms conversion time
   }
+
   celsius = (float)raw / 16.0;
-  fahrenheit = celsius * 1.8 + 32.0;
   Serial.print("  Temperature = ");
   Serial.print(celsius);
-  Serial.print(" Celsius, ");
-  Serial.print(fahrenheit);
-  Serial.println(" Fahrenheit");
+  Serial.println(" Celsius");
 
-  if (celsius >= 62) {
-    tone(kSpeaker, 262, kBeatTime);
-  } else {
-    tone(kSpeaker, 262, kBeatTime / 2);
-    delay(100);
-    tone(kSpeaker, 262, kBeatTime / 2);
+  process(raw);
+}
+
+float celsius(int16_t raw) {
+  return (float)raw / 16.0;
+}
+
+const int kTemperatureSize = 100;
+Temperature temperatures[kTemperatureSize];
+int temperatures_i = 0;
+int total_temperatures = 0;
+
+int next(int i) { return (i + 1) % kTemperatureSize; }
+
+void add_temperature(int16_t raw) {
+  Temperature* curr = &temperatures[temperatures_i];
+  curr->Raw = raw;
+  curr->Millis = millis();
+  temperatures_i = next(temperatures_i);
+  total_temperatures++;
+}
+
+Temperature* get_temperature(int i) {
+  return &temperatures[(temperatures_i - 1 - i + kTemperatureSize) % kTemperatureSize];
+}
+
+const int kSpeaker = 12;
+const int kBeatTime = 500;
+
+const float kTargetCelsius = 58.0;
+
+void process(int16_t raw) {
+  add_temperature(raw);
+
+  Temperature* t = get_temperature(0);
+  for (int i = 1; i < total_temperatures && i < kTemperatureSize; ++i) {
+    Temperature* pt = get_temperature(i);
+    if (t->Raw != pt->Raw) {
+      int64_t rd = t->Raw - pt->Raw;
+      unsigned long md = t->Millis - pt->Millis;
+      float future = celsius(float(rd) / md * 60 * 1000 + t->Raw);
+      Serial.print("  Future = ");
+      Serial.println(future);
+
+      if (t->Raw > pt->Raw && future > kTargetCelsius) {
+        tone(kSpeaker, 523, kBeatTime);
+      } else if (t->Raw < pt->Raw && future < kTargetCelsius) {
+        tone(kSpeaker, 262, kBeatTime);
+      }
+      break;
+    }
   }
 }
 

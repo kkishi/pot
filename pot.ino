@@ -1,12 +1,26 @@
 #include "pot.h"
 
 #include <OneWire.h>
+#include <LiquidCrystal.h>
 
-OneWire  ds(13);
+const int kSsr = 11;
+const int kPot = A1;
+
+LiquidCrystal lcd(8, 9, 4, 5, 6, 7);
 
 void setup(void) {
   Serial.begin(9600);
+  pinMode(kSsr, OUTPUT);
+
+  lcd.begin(16, 2);
 }
+
+void printLcd(int row, float celsius) {
+  lcd.setCursor(0, row);
+  lcd.print(celsius);
+}
+
+OneWire  ds(13);
 
 void loop(void) {
   byte i;
@@ -50,7 +64,7 @@ void loop(void) {
   ds.select(addr);
   ds.write(0x44, 1);        // start conversion, with parasite power on at the end
 
-  delay(5000);     // maybe 750ms is enough, maybe not
+  delay(1000);     // maybe 750ms is enough, maybe not
   // we might do a ds.depower() here, but the reset will take care of it.
 
   present = ds.reset();
@@ -85,8 +99,23 @@ void loop(void) {
   Serial.print("  Temperature = ");
   Serial.print(celsius);
   Serial.println(" Celsius");
+  printLcd(0, celsius);
 
-  process(raw);
+  // 0 <= voltage <= 676 (= 1024 * 3.3 / 5.0)
+  int analog = analogRead(kPot);
+
+  // 0 <= roundedAnalog <= 600
+  int roundedAnalog = max(0, min(600, analog - 38));
+
+  // 50 <= celsius <= 80
+  float target = (float)roundedAnalog / 20.0 + 50.0;
+
+  Serial.print("  Target = ");
+  Serial.println(target);
+  Serial.println(" Celsius");
+  printLcd(1, target);
+
+  process(raw, target);
 }
 
 float celsius(int16_t raw) {
@@ -106,37 +135,22 @@ void add_temperature(int16_t raw) {
   curr->Millis = millis();
   temperatures_i = next(temperatures_i);
   total_temperatures++;
+
 }
 
 Temperature* get_temperature(int i) {
   return &temperatures[(temperatures_i - 1 - i + kTemperatureSize) % kTemperatureSize];
 }
 
-const int kSpeaker = 12;
-const int kBeatTime = 500;
-
-const float kTargetCelsius = 58.0;
-
-void process(int16_t raw) {
+void process(int16_t raw, float target) {
   add_temperature(raw);
 
   Temperature* t = get_temperature(0);
-  for (int i = 1; i < total_temperatures && i < kTemperatureSize; ++i) {
-    Temperature* pt = get_temperature(i);
-    if (t->Raw != pt->Raw) {
-      int64_t rd = t->Raw - pt->Raw;
-      unsigned long md = t->Millis - pt->Millis;
-      float future = celsius(float(rd) / md * 60 * 1000 + t->Raw);
-      Serial.print("  Future = ");
-      Serial.println(future);
-
-      if (t->Raw > pt->Raw && future > kTargetCelsius) {
-        tone(kSpeaker, 523, kBeatTime);
-      } else if (t->Raw < pt->Raw && future < kTargetCelsius) {
-        tone(kSpeaker, 262, kBeatTime);
-      }
-      break;
-    }
+  if (celsius(t->Raw) > target) {
+    digitalWrite(kSsr, LOW);
+    Serial.println("LOW");
+  } else {
+    digitalWrite(kSsr, HIGH);
+    Serial.println("HIGH");
   }
 }
-
